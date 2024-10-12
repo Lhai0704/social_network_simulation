@@ -1,9 +1,11 @@
+import random
+
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
-from app.models.node import Node, Connection, NodeCreate, NodeResponse, ConnectionCreate, Message, MessageCreate, MessageResponse
+from app.models.node import Node, Connection, NodeCreate, NodeResponse, ConnectionCreate, Message, MessageCreate, MessageResponse, Memory
 from app.services.ollama_service import generate_message, get_embedding
 from database import SessionLocal, engine
-from app.services.crud import create_node, get_nodes, create_connection, update_node_memory, get_node, create_message, get_messages_for_node
+from app.services.crud import create_node, get_nodes, create_connection, add_memory, get_node, create_message, get_messages_for_node, get_neighbour
 from sqlalchemy.orm import Session
 import logging
 
@@ -24,29 +26,21 @@ def get_db():
         db.close()
 
 
-# curl -X POST "http://localhost:8000/nodes/" -H "Content-Type: application/json" -d '{"name": "Amy"}'
-# @router.post("/nodes/", response_model=Node)
-# async def create_node(node: NodeCreate):
-#     new_node = Node(id=len(nodes) + 1, name=node.name)
-#     nodes.append(new_node)
-#     return new_node
-
 # 添加节点
-# curl -X POST "http://localhost:8000/nodes/" -H "Content-Type: application/json" -d '{"name": "Amy"}'
 @router.post("/nodes/", response_model=NodeResponse)
 def add_node(node: NodeCreate, db: Session = Depends(get_db)):  # 使用 NodeCreate 作为请求体
     return create_node(db, node.name)
 
 
-# # curl "http://localhost:8000/nodes/"
-# @router.get("/nodes/", response_model=List[Node])
-# async def read_nodes():
-#     return nodes
-
 # 获取所有节点
 @router.get("/nodes/")
 def list_nodes(db: Session = Depends(get_db)):
     return get_nodes(db)
+
+
+# 获取邻居id列表
+def list_neighbour(node_id, db: Session = Depends(get_db)):
+    return get_neighbour(db, node_id)
 
 
 # curl "http://localhost:8000/nodes/1"
@@ -56,19 +50,6 @@ def list_nodes(db: Session = Depends(get_db)):
 #         if node.id == node_id:
 #             return node
 #     raise HTTPException(status_code=404, detail="Node not found")
-
-
-# curl -X POST "http://localhost:8000/nodes/1/generate_message"
-# @router.post("/nodes/{node_id}/generate_message")
-# async def generate_node_message(node_id: int):
-#     node = next((n for n in nodes if n.id == node_id), None)
-#     if not node:
-#         raise HTTPException(status_code=404, detail="Node not found")
-#
-#     prompt = f"You are a social network node named {node.name}. Generate a short message."
-#     message = await generate_message(prompt, model="llama3.1")
-#     node.last_message = message
-#     return {"message": message}
 
 
 # @router.post("/nodes/{node_id}/get_embedding")
@@ -84,65 +65,47 @@ def list_nodes(db: Session = Depends(get_db)):
 #     return {"embedding": embedding}
 
 
-# curl -X POST "http://localhost:8000/nodes/1/connect" -H "Content-Type: application/json" -d '{"target_node_id": "2"}'
-# @router.post("/nodes/{node_id}/connect")
-# async def connect_nodes(node_id: int, connection: NodeConnection):
-#     source_node = next((n for n in nodes if n.id == node_id), None)
-#     target_node = next((n for n in nodes if n.id == connection.target_node_id), None)
-#
-#     if not source_node or not target_node:
-#         raise HTTPException(status_code=404, detail="One or both nodes not found")
-#
-#     if connection.target_node_id not in source_node.connections:
-#         source_node.connections.append(connection.target_node_id)
-#     if node_id not in target_node.connections:
-#         target_node.connections.append(node_id)
-#
-#     return {"message": "Nodes connected successfully"}
-
 # 创建连接
 @router.post("/nodes/{node_id}/connect")
 def connect_nodes(node_id: int, target_node_id: ConnectionCreate, db: Session = Depends(get_db)):
     return create_connection(db, node_id, target_node_id.target_node_id)
 
 
-# curl -X POST "http://localhost:8000/nodes/1/interact"
-# @router.post("/nodes/{node_id}/interact")
-# async def node_interaction(node_id: int):
-#     node = next((n for n in nodes if n.id == node_id), None)
-#     if not node:
-#         raise HTTPException(status_code=404, detail="Node not found")
-#
-#     connected_nodes = [n for n in nodes if n.id in node.connections]
-#     context = "\n".join([f"{n.name}: {n.last_message}" for n in connected_nodes if n.last_message])
-#
-#     prompt = f"""You are a social network node named {node.name}.
-#     Your connections have recently said:
-#     {context}
-#     Based on this, generate a short message as a response."""
-#
-#     message = await generate_message(prompt, model="llama3.1")
-#     node.last_message = message
-#     return {"message": message}
-
 async def generate_memory_based_message(sender_node, receiver_node, db: Session):
+    memories = get_relevant_memories(db, sender_node.id)
+    memories_text = "\n".join(memories)
+
     # Construct a prompt that includes the sender's memory and the context of the conversation
     prompt = f"""
+    I want you to act as a social network node. 
     You are node {sender_node.name} with the following memory:
-    {sender_node.memory}
+    {memories_text}
 
     You are sending a message to node {receiver_node.name}.
-    Based on your memory and personality, generate a message to send.
+    Based on your memory and personality, generate a message to send. 
+    Don't explain, just talk about the content of the chat.
     """
 
+    print("1111111111111111")
+    print(prompt)
+    print("2222222222222222")
+
     # Generate the message content
-    message_content = await generate_message(prompt, model="llama3.1")
+    message_content = generate_message(prompt)
 
     # Update the sender's memory with this interaction
-    new_memory = f"{sender_node.memory}\nSent message to {receiver_node.name}: {message_content}"
-    update_node_memory(db, sender_node.id, new_memory)
+    add_conversation_memory(db, sender_node.id, receiver_node.id, content=message_content)
 
     return message_content
+
+
+def add_conversation_memory(db: Session, speaker_id: int, listener_id: int, content: str,
+                            context: str = None, sentiment: str = None, importance: float = 0.5):
+    # 为说话者添加记忆
+    add_memory(db, speaker_id, "conversation", content, True, listener_id, context, sentiment, importance)
+
+    # 为听者添加记忆
+    add_memory(db, listener_id, "conversation", content, False, speaker_id, context, sentiment, importance)
 
 
 @router.post("/messages/", response_model=MessageResponse)
@@ -211,3 +174,33 @@ async def start_dialogue(node1_id: int, node2_id: int, num_turns: int = 5, db: S
     except Exception as e:
         logger.error(f"Error during dialogue: {str(e)}")
         return {"error": "An error occurred during the dialogue", "details": str(e)}
+
+
+# 获取相关记忆
+def get_relevant_memories(db: Session, node_id: int, limit: int = 10) -> List[str]:
+    memories = db.query(Memory).filter(Memory.node_id == node_id) \
+        .order_by(Memory.importance.desc(), Memory.created_at.desc()) \
+        .limit(limit) \
+        .all()
+
+    formatted_memories = []
+    for memory in memories:
+        speaker = "Self" if memory.is_own_message else f"Node {memory.other_node_id}"
+        formatted_memory = f"{memory.memory_type.upper()} - {speaker}: {memory.content}"
+        if memory.context:
+            formatted_memory += f" (Context: {memory.context})"
+        formatted_memories.append(formatted_memory)
+
+    return formatted_memories
+
+
+@router.post("/multi-dialogue/")
+def multi_dialogue(num_turns: int = 3, db: Session = Depends(get_db)):
+    for i in range(num_turns):
+        speaker = random.choice(get_nodes(db))
+        print("111111")
+        print(speaker.id)
+        print("222222")
+        neighbours = list_neighbour(speaker.id, db)
+        print(neighbours)
+        print("333333")

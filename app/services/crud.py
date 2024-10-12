@@ -1,10 +1,10 @@
 from sqlalchemy.orm import Session
-from app.models.node import Node, Connection, Message, MessageCreate
+from app.models.node import Node, Connection, Message, MessageCreate, Memory
 
 
 # 创建新节点
 def create_node(db: Session, name: str):
-    node = Node(name=name, memory="")
+    node = Node(name=name)
     db.add(node)
     db.commit()
     db.refresh(node)
@@ -29,13 +29,29 @@ def create_connection(db: Session, source_node_id: int, target_node_id: int):
     return connection
 
 
-def update_node_memory(db: Session, node_id: int, new_memory: str):
-    db_node = get_node(db, node_id)
-    if db_node:
-        db_node.memory = new_memory
-        db.commit()
-        db.refresh(db_node)
-    return db_node
+def get_neighbour(db: Session, node_id: int):
+    return db.query(Connection.target_node_id).filter(Connection.source_node_id == node_id).all()
+
+
+# 添加记忆的函数
+def add_memory(db: Session, node_id: int, memory_type: str, content: str,
+               is_own_message: bool, other_node_id: int,
+               context: str = None, sentiment: str = None,
+               importance: float = 0.5):
+    new_memory = Memory(
+        node_id=node_id,
+        memory_type=memory_type,
+        content=content,
+        is_own_message=is_own_message,
+        other_node_id=other_node_id,
+        context=context,
+        sentiment=sentiment,
+        importance=importance
+    )
+    db.add(new_memory)
+    db.commit()
+    db.refresh(new_memory)
+    return new_memory
 
 
 def create_message(db: Session, message: MessageCreate):

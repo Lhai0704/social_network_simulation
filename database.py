@@ -1,9 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
-# MySQL 连接 URL：'mysql+pymysql://<username>:<password>@<host>/<database>'
-SQLALCHEMY_DATABASE_URL = "mysql+pymysql://root:Mysql9898...@localhost/social_network_simulation"
+from config import SQLALCHEMY_DATABASE_URL
 
 # 创建数据库引擎
 engine = create_engine(SQLALCHEMY_DATABASE_URL)

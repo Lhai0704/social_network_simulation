@@ -1,29 +1,57 @@
 from pydantic import BaseModel
 from typing import List, Optional
-from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, Enum, Boolean
 from datetime import datetime
 
-
-# class Node(BaseModel):
-#     id: int
-#     name: str
-#     connections: List[int] = []
-#     last_message: Optional[str] = None
 
 class Node(Base):
     __tablename__ = "nodes"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), unique=True, index=True)
-    memory = Column(Text)
+
+    # 明确指定 backref 和 foreign_keys
+    memories = relationship("Memory", back_populates="node", foreign_keys="Memory.node_id")
+    received_messages = relationship("Memory", back_populates="other_node", foreign_keys="Memory.other_node_id")
 
     # 定义与连接的关系
     connections_from = relationship("Connection", foreign_keys='Connection.source_node_id', back_populates="source_node")
     connections_to = relationship("Connection", foreign_keys='Connection.target_node_id', back_populates="target_node")
+
+
+class Memory(Base):
+    __tablename__ = "memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    node_id = Column(Integer, ForeignKey("nodes.id"), nullable=False)
+    memory_type = Column(Enum("conversation", "fact", "experience", "trait", "relationship"))
+    content = Column(Text)
+    is_own_message = Column(Boolean)
+    other_node_id = Column(Integer, ForeignKey("nodes.id"), nullable=True)
+    context = Column(Text, nullable=True)
+    sentiment = Column(Enum("positive", "neutral", "negative"), nullable=True)
+    importance = Column(Float)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_accessed = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # 明确指定 foreign_keys
+    node = relationship("Node", back_populates="memories", foreign_keys=[node_id])
+    other_node = relationship("Node", back_populates="received_messages", foreign_keys=[other_node_id])
+
+
+class Connection(Base):
+    __tablename__ = "connections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_node_id = Column(Integer, ForeignKey("nodes.id"))
+    target_node_id = Column(Integer, ForeignKey("nodes.id"))
+
+    # 定义连接与节点的关系
+    source_node = relationship("Node", foreign_keys=[source_node_id], back_populates="connections_from")
+    target_node = relationship("Node", foreign_keys=[target_node_id], back_populates="connections_to")
 
 
 # 定义请求体模型
@@ -38,24 +66,7 @@ class NodeResponse(BaseModel):
     connections: List[int] = []
 
     class Config:
-        orm_mode = True
-# class NodeCreate(BaseModel):
-#     name: str
-
-
-# class NodeConnection(BaseModel):
-#     target_node_id: int
-
-class Connection(Base):
-    __tablename__ = "connections"
-
-    id = Column(Integer, primary_key=True, index=True)
-    source_node_id = Column(Integer, ForeignKey("nodes.id"))
-    target_node_id = Column(Integer, ForeignKey("nodes.id"))
-
-    # 定义连接与节点的关系
-    source_node = relationship("Node", foreign_keys=[source_node_id], back_populates="connections_from")
-    target_node = relationship("Node", foreign_keys=[target_node_id], back_populates="connections_to")
+        from_attributes = True
 
 
 class ConnectionCreate(BaseModel):
@@ -90,4 +101,4 @@ class MessageResponse(MessageBase):
     timestamp: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
