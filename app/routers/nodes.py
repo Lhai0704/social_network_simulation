@@ -43,52 +43,29 @@ def list_neighbour(node_id, db: Session = Depends(get_db)):
     return get_neighbour(db, node_id)
 
 
-# curl "http://localhost:8000/nodes/1"
-# @router.get("/nodes/{node_id}", response_model=Node)
-# async def read_node(node_id: int):
-#     for node in nodes:
-#         if node.id == node_id:
-#             return node
-#     raise HTTPException(status_code=404, detail="Node not found")
-
-
-# @router.post("/nodes/{node_id}/get_embedding")
-# async def get_node_embedding(node_id: int):
-#     node = next((n for n in nodes if n.id == node_id), None)
-#     if not node:
-#         raise HTTPException(status_code=404, detail="Node not found")
-#
-#     if not node.last_message:
-#         raise HTTPException(status_code=400, detail="Node has no message to embed")
-#
-#     embedding = await get_embedding(node.last_message, model="all-minilm")
-#     return {"embedding": embedding}
-
-
 # 创建连接
 @router.post("/nodes/{node_id}/connect")
 def connect_nodes(node_id: int, target_node_id: ConnectionCreate, db: Session = Depends(get_db)):
     return create_connection(db, node_id, target_node_id.target_node_id)
 
 
-async def generate_memory_based_message(sender_node, receiver_node, db: Session):
+def generate_memory_based_message(sender_node, receiver_node, db: Session):
     memories = get_relevant_memories(db, sender_node.id)
     memories_text = "\n".join(memories)
 
-    # Construct a prompt that includes the sender's memory and the context of the conversation
     prompt = f"""
-    I want you to act as a social network node. 
-    You are node {sender_node.name} with the following memory:
+    I want you to play a social network user, your name is {sender_node.name}, your profile is as follows:
+    ###
+    {sender_node.profile}
+    ###
+    The following is your memory of interaction with other nodes:
+    ###
     {memories_text}
-
-    You are sending a message to node {receiver_node.name}.
-    Based on your memory and personality, generate a message to send. 
-    Don't explain, just talk about the content of the chat.
+    ###
+    Based on your profile and memory, discuss the news of Japan's nuclear wastewater discharge with {receiver_node.name}.  His/Her profile is {receiver_node.profile}. 
+    This message should imitate the human tone as much as possible, do not explain, just say the content of the message to be sent.
+    
     """
-
-    print("1111111111111111")
-    print(prompt)
-    print("2222222222222222")
 
     # Generate the message content
     message_content = generate_message(prompt)
@@ -109,7 +86,7 @@ def add_conversation_memory(db: Session, speaker_id: int, listener_id: int, cont
 
 
 @router.post("/messages/", response_model=MessageResponse)
-async def send_message(message: MessageCreate, db: Session = Depends(get_db)):
+def send_message(message: MessageCreate, db: Session = Depends(get_db)):
     sender_node = get_node(db, message.sender_id)
     receiver_node = get_node(db, message.receiver_id)
 
@@ -117,7 +94,7 @@ async def send_message(message: MessageCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Sender or receiver node not found")
 
     # Generate message content using memory-based function
-    generated_content = await generate_memory_based_message(sender_node, receiver_node, db)
+    generated_content = generate_memory_based_message(sender_node, receiver_node, db)
 
     # Create message with generated content
     message.content = generated_content
@@ -130,7 +107,7 @@ def get_node_messages(node_id: int, skip: int = 0, limit: int = 100, db: Session
     return messages
 
 
-async def conduct_dialogue(node1_id: int, node2_id: int, num_turns: int, db: Session = Depends(get_db)):
+def conduct_dialogue(node1_id: int, node2_id: int, num_turns: int, db: Session = Depends(get_db)):
     node1 = get_node(db, node1_id)
     node2 = get_node(db, node2_id)
 
@@ -152,7 +129,7 @@ async def conduct_dialogue(node1_id: int, node2_id: int, num_turns: int, db: Ses
         )
 
         # Send the message using the existing send_message function
-        sent_message = await send_message(message, db)
+        sent_message = send_message(message, db)
 
         dialogue_history.append({
             "turn": turn + 1,
@@ -167,9 +144,9 @@ async def conduct_dialogue(node1_id: int, node2_id: int, num_turns: int, db: Ses
 
 
 @router.post("/start-dialogue/")
-async def start_dialogue(node1_id: int, node2_id: int, num_turns: int = 5, db: Session = Depends(get_db)):
+def start_dialogue(node1_id: int, node2_id: int, num_turns: int = 5, db: Session = Depends(get_db)):
     try:
-        dialogue_history = await conduct_dialogue(node1_id, node2_id, num_turns, db)
+        dialogue_history = conduct_dialogue(node1_id, node2_id, num_turns, db)
         return {"message": "Dialogue completed", "history": dialogue_history}
     except Exception as e:
         logger.error(f"Error during dialogue: {str(e)}")
@@ -179,13 +156,17 @@ async def start_dialogue(node1_id: int, node2_id: int, num_turns: int = 5, db: S
 # 获取相关记忆
 def get_relevant_memories(db: Session, node_id: int, limit: int = 10) -> List[str]:
     memories = db.query(Memory).filter(Memory.node_id == node_id) \
-        .order_by(Memory.importance.desc(), Memory.created_at.desc()) \
+        .order_by(Memory.importance.desc(), Memory.created_at.asc()) \
         .limit(limit) \
         .all()
 
     formatted_memories = []
     for memory in memories:
-        speaker = "Self" if memory.is_own_message else f"Node {memory.other_node_id}"
+        if memory.is_own_message:
+            speaker = "I told " + get_node(db, memory.other_node_id).name
+        else:
+            speaker = get_node(db, memory.other_node_id).name + " told me"
+
         formatted_memory = f"{memory.memory_type.upper()} - {speaker}: {memory.content}"
         if memory.context:
             formatted_memory += f" (Context: {memory.context})"
@@ -195,12 +176,10 @@ def get_relevant_memories(db: Session, node_id: int, limit: int = 10) -> List[st
 
 
 @router.post("/multi-dialogue/")
-def multi_dialogue(num_turns: int = 3, db: Session = Depends(get_db)):
-    for i in range(num_turns):
-        speaker = random.choice(get_nodes(db))
-        print("111111")
-        print(speaker.id)
-        print("222222")
-        neighbours = list_neighbour(speaker.id, db)
-        print(neighbours)
-        print("333333")
+def multi_dialogue(num_turns: int = 1, db: Session = Depends(get_db)):
+    for _ in range(num_turns):
+        for node in list_nodes(db):
+            neighbours = list_neighbour(node.id, db)
+            if neighbours:
+                neighbour = random.choice(neighbours)
+                conduct_dialogue(node.id, neighbour[0], 1, db)

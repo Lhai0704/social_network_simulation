@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, Enum, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, Enum, Boolean, JSON
 from datetime import datetime
 
 
@@ -12,6 +12,7 @@ class Node(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), unique=True, index=True)
+    profile = Column(JSON)
 
     # 明确指定 backref 和 foreign_keys
     memories = relationship("Memory", back_populates="node", foreign_keys="Memory.node_id")
